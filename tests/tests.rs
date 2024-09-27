@@ -1338,8 +1338,8 @@ fn test_restore_mode_with_exclude_regex() {
 
     // Assertions
     assert!(
-        exclude_file_path.exists(),
-        "Excluded file should not be restored"
+        !exclude_file_path.exists(),
+        "Excluded file should also be restored"
     );
     assert!(
         !include_file_path.exists(),
@@ -1610,5 +1610,47 @@ fn test_move_files_with_recursive_exclude_patterns() {
             .join("include_me.txt")
             .exists(),
         "Included file should be in destination"
+    );
+}
+
+#[test]
+fn test_restore_ignores_days_parameter() {
+    // Create source and temporary directories
+    let temp_source_dir = TempDir::new().unwrap();
+    let temp_temp_dir = TempDir::new().unwrap();
+
+    // Create a file in the temporary directory to be restored
+    let temp_file_path = temp_temp_dir.path().join("temp_file.txt");
+    fs::write(&temp_file_path, b"Temporary file").unwrap();
+    set_file_modified_time(&temp_file_path, 40); // File modified 40 days ago
+
+    // Set up CLI arguments with a days parameter that doesn't match the file's age
+    let cli_restore = Cli {
+        source: temp_source_dir.path().to_path_buf(),
+        temporary: temp_temp_dir.path().to_path_buf(),
+        days: "-10".to_string(), // Files modified less than 10 days ago
+        dry_run: false,
+        verbose: true,
+        mode: OperationMode::Restore,
+        exclude: None,
+    };
+
+    let mover_restore = FileMover::new(&cli_restore).unwrap();
+    let result = mover_restore.execute();
+
+    // The restore should succeed and restore the file despite the days parameter
+    assert!(
+        result.is_ok(),
+        "Restore should succeed regardless of --days parameter"
+    );
+
+    // Verify that temp_file.txt is restored to the source directory
+    assert!(
+        temp_source_dir.path().join("temp_file.txt").exists(),
+        "temp_file.txt should be restored"
+    );
+    assert!(
+        !temp_file_path.exists(),
+        "temp_file.txt should no longer be in temporary directory"
     );
 }

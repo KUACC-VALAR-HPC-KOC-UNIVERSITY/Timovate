@@ -122,7 +122,7 @@ impl FileMover {
     pub fn execute(&self) -> io::Result<()> {
         match self.mode {
             OperationMode::Move => self.process_files(&self.source, &self.temporary)?,
-            OperationMode::Restore => self.process_files(&self.temporary, &self.source)?,
+            OperationMode::Restore => self.restore_files(&self.temporary, &self.source)?,
         }
 
         println!(
@@ -133,6 +133,88 @@ impl FileMover {
         );
 
         Ok(())
+    }
+
+    fn restore_files(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if !from.exists() {
+            eprintln!("Temporary directory {} does not exist", from.display());
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            let src_path = entry.path();
+            let dest_path = to.join(entry.file_name());
+
+            let metadata = fs::symlink_metadata(&src_path)?;
+            let is_dir = metadata.is_dir();
+
+            self.restore_entry(&src_path, &dest_path, is_dir)?;
+        }
+
+        Ok(())
+    }
+
+    fn restore_entry(&self, src: &Path, dest: &Path, is_dir: bool) -> io::Result<()> {
+        if dest.exists() {
+            if is_dir {
+                // Merge directories
+                for entry in fs::read_dir(src)? {
+                    let entry = entry?;
+                    let entry_src = entry.path();
+                    let entry_dest = dest.join(entry.file_name());
+                    let metadata = entry.metadata()?;
+                    let is_entry_dir = metadata.is_dir();
+                    self.restore_entry(&entry_src, &entry_dest, is_entry_dir)?;
+                }
+                // Remove the now-empty source directory
+                fs::remove_dir(src)?;
+                // Add Ok(()) here to return the expected type
+                Ok(())
+            } else {
+                // File exists; skip or handle conflict
+                if self.verbose {
+                    println!(
+                        "Destination file {} already exists; skipping",
+                        dest.display()
+                    );
+                }
+                // Return Ok(())
+                Ok(())
+            }
+        } else {
+            // Destination does not exist; proceed with move
+            self.create_parent_directories(dest)?;
+            if self.dry_run {
+                if is_dir {
+                    println!(
+                        "[DRY RUN] Would move directory {} to {}",
+                        src.display(),
+                        dest.display()
+                    );
+                } else {
+                    println!(
+                        "[DRY RUN] Would move file {} to {}",
+                        src.display(),
+                        dest.display()
+                    );
+                }
+            } else {
+                fs::rename(src, dest)?;
+                if self.verbose {
+                    if is_dir {
+                        println!("Moved directory {} to {}", src.display(), dest.display());
+                    } else {
+                        println!("Moved file {} to {}", src.display(), dest.display());
+                    }
+                }
+            }
+
+            // Update stats
+            let metadata = fs::symlink_metadata(dest)?;
+            self.update_stats(dest, &metadata, is_dir)?;
+            Ok(())
+        }
     }
 
     fn process_files(&self, from: &Path, to: &Path) -> io::Result<()> {

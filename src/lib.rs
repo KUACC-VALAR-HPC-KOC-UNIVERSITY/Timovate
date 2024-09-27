@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime};
 
 #[derive(Parser)]
 #[command(
+    version,
     name = "Timovate",
     about = "Moves files based on their modification time"
 )]
@@ -71,6 +72,13 @@ pub struct FileMover {
 impl FileMover {
     pub fn new(cli: &Cli) -> Result<Self, String> {
         let time_comparison = Self::parse_time_comparison(&cli.days)?;
+
+        // Check if source and temporary directories are the same
+        let source_canonical = cli.source.canonicalize().map_err(|e| e.to_string())?;
+        let temporary_canonical = cli.temporary.canonicalize().map_err(|e| e.to_string())?;
+        if source_canonical == temporary_canonical {
+            return Err("Source and temporary directories cannot be the same".to_string());
+        }
 
         // Map the patterns into a vector of Regex objects
         let exclude_regex = if let Some(patterns) = &cli.exclude {
@@ -138,7 +146,10 @@ impl FileMover {
     fn restore_files(&self, from: &Path, to: &Path) -> io::Result<()> {
         if !from.exists() {
             eprintln!("Temporary directory {} does not exist", from.display());
-            return Ok(());
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Temporary directory does not exist",
+            ));
         }
 
         for entry in fs::read_dir(from)? {

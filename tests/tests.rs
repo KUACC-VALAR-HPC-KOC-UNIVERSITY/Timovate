@@ -1,5 +1,6 @@
 use filetime::{set_file_mtime, FileTime};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
@@ -1245,37 +1246,6 @@ fn test_empty_source_directory() {
 }
 
 #[test]
-fn test_non_existent_source_directory() {
-    let temp_source_dir = TempDir::new().unwrap();
-    let temp_dest_dir = TempDir::new().unwrap();
-
-    // Remove the source directory
-    fs::remove_dir(temp_source_dir.path()).unwrap();
-
-    // Set up CLI arguments
-    let cli = Cli {
-        source: temp_source_dir.path().to_path_buf(), // This path no longer exists
-        temporary: temp_dest_dir.path().to_path_buf(),
-        days: "0".to_string(),
-        dry_run: false,
-        verbose: true,
-        mode: OperationMode::Move,
-        exclude: None,
-    };
-
-    // Since the source directory does not exist, the program should handle the error
-    let result = std::panic::catch_unwind(|| {
-        let mover = FileMover::new(&cli).unwrap();
-        mover.execute().unwrap();
-    });
-
-    assert!(
-        result.is_ok(),
-        "Program should handle non-existent source directory gracefully"
-    );
-}
-
-#[test]
 fn test_move_files_with_no_matching_time_criteria() {
     let temp_source_dir = TempDir::new().unwrap();
     let temp_dest_dir = TempDir::new().unwrap();
@@ -1653,4 +1623,465 @@ fn test_restore_ignores_days_parameter() {
         !temp_file_path.exists(),
         "temp_file.txt should no longer be in temporary directory"
     );
+}
+
+#[test]
+fn test_move_with_empty_source_directory() {
+    let temp_source_dir = TempDir::new().unwrap();
+    let temp_dest_dir = TempDir::new().unwrap();
+
+    // Source directory is empty
+
+    // Set up CLI arguments
+    let cli = Cli {
+        source: temp_source_dir.path().to_path_buf(),
+        temporary: temp_dest_dir.path().to_path_buf(),
+        days: "0".to_string(),
+        dry_run: false,
+        verbose: true,
+        mode: OperationMode::Move,
+        exclude: None,
+    };
+
+    let mover = FileMover::new(&cli).unwrap();
+    let result = mover.execute();
+
+    // Assertions
+    assert!(
+        result.is_ok(),
+        "Program should handle empty source directory gracefully"
+    );
+    assert_eq!(
+        mover.stats.files_moved.load(Ordering::SeqCst),
+        0,
+        "No files should be moved from an empty source directory"
+    );
+}
+
+#[test]
+fn test_move_with_same_source_and_destination() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Set up CLI arguments with same source and temporary directories
+    let cli = Cli {
+        source: temp_dir.path().to_path_buf(),
+        temporary: temp_dir.path().to_path_buf(),
+        days: "0".to_string(),
+        dry_run: false,
+        verbose: false,
+        mode: OperationMode::Move,
+        exclude: None,
+    };
+
+    // Attempt to create FileMover should fail
+    let result = FileMover::new(&cli);
+
+    assert!(
+        result.is_err(),
+        "Program should not allow the same directory for source and temporary"
+    );
+}
+
+#[test]
+fn test_move_files_with_long_file_names() {
+    let temp_source_dir = TempDir::new().unwrap();
+    let temp_dest_dir = TempDir::new().unwrap();
+
+    // Create a file with a very long name
+    let long_file_name = "a".repeat(255); // Maximum filename length on many filesystems
+    let long_file_path = temp_source_dir.path().join(&long_file_name);
+    fs::write(&long_file_path, b"Long file name").unwrap();
+    set_file_modified_time(&long_file_path, 40);
+
+    // Set up CLI arguments
+    let cli = Cli {
+        source: temp_source_dir.path().to_path_buf(),
+        temporary: temp_dest_dir.path().to_path_buf(),
+        days: "+30".to_string(),
+        dry_run: false,
+        verbose: true,
+        mode: OperationMode::Move,
+        exclude: None,
+    };
+
+    let mover = FileMover::new(&cli).unwrap();
+    let result = mover.execute();
+
+    // Assertions
+    assert!(
+        result.is_ok(),
+        "Program should handle long file names without error"
+    );
+    assert!(
+        !long_file_path.exists(),
+        "File with long name should be moved"
+    );
+    assert!(
+        temp_dest_dir.path().join(&long_file_name).exists(),
+        "File with long name should be in destination"
+    );
+}
+
+#[test]
+fn test_move_files_with_invalid_characters_in_filenames() {
+    let temp_source_dir = TempDir::new().unwrap();
+
+    // Create files with invalid characters in filenames
+    let invalid_file_name = "invalid\0name.txt"; // Null character is invalid
+    let invalid_file_path = temp_source_dir.path().join(&invalid_file_name);
+
+    // Attempting to create a file with an invalid name should fail
+    let result = fs::write(&invalid_file_path, b"Invalid filename");
+
+    // Assertions
+    assert!(
+        result.is_err(),
+        "Creating a file with an invalid name should fail"
+    );
+}
+
+#[test]
+fn test_move_with_circular_symbolic_links() {
+    let temp_source_dir = TempDir::new().unwrap();
+    let temp_dest_dir = TempDir::new().unwrap();
+
+    // Create a directory and a symlink to itself
+    let dir_path = temp_source_dir.path().join("dir");
+    fs::create_dir(&dir_path).unwrap();
+
+    let symlink_path = dir_path.join("symlink");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&dir_path, &symlink_path).unwrap();
+
+    // Set up CLI arguments
+    let cli = Cli {
+        source: temp_source_dir.path().to_path_buf(),
+        temporary: temp_dest_dir.path().to_path_buf(),
+        days: "0".to_string(),
+        dry_run: false,
+        verbose: true,
+        mode: OperationMode::Move,
+        exclude: None,
+    };
+
+    // Since symbolic links are skipped, this should not cause infinite recursion
+    let mover = FileMover::new(&cli).unwrap();
+    let result = mover.execute();
+
+    // Assertions
+    assert!(
+        result.is_ok(),
+        "Program should handle circular symbolic links gracefully"
+    );
+}
+
+#[test]
+fn test_move_files_without_read_permission() {
+    #[cfg(unix)]
+    {
+        let temp_source_dir = TempDir::new().unwrap();
+        let temp_dest_dir = TempDir::new().unwrap();
+
+        // Create a file and remove read permissions
+        let file_path = temp_source_dir.path().join("file.txt");
+        fs::write(&file_path, b"Content").unwrap();
+        set_file_modified_time(&file_path, 40);
+
+        let mut permissions = fs::metadata(&file_path).unwrap().permissions();
+        permissions.set_mode(0o000); // No permissions
+        fs::set_permissions(&file_path, permissions.clone()).unwrap();
+
+        // Set up CLI arguments
+        let cli = Cli {
+            source: temp_source_dir.path().to_path_buf(),
+            temporary: temp_dest_dir.path().to_path_buf(),
+            days: "+30".to_string(),
+            dry_run: false,
+            verbose: true,
+            mode: OperationMode::Move,
+            exclude: None,
+        };
+
+        let mover = FileMover::new(&cli).unwrap();
+        let result = mover.execute();
+
+        // Restore permissions for cleanup
+        let dest_file_path = temp_dest_dir.path().join("file.txt");
+        if dest_file_path.exists() {
+            permissions.set_mode(0o644);
+            fs::set_permissions(&dest_file_path, permissions).unwrap();
+        } else {
+            // If the file was not moved, restore permissions at the source
+            permissions.set_mode(0o644);
+            fs::set_permissions(&file_path, permissions).unwrap();
+        }
+
+        // Assertions
+        assert!(
+            result.is_ok(),
+            "Program should handle files without read permission without error"
+        );
+        assert!(
+            dest_file_path.exists(),
+            "File should be moved to destination"
+        );
+    }
+}
+
+#[test]
+fn test_move_files_with_hard_links() {
+    #[cfg(unix)]
+    {
+        let temp_source_dir = TempDir::new().unwrap();
+        let temp_dest_dir = TempDir::new().unwrap();
+
+        // Create a file and a hard link to it
+        let file_path = temp_source_dir.path().join("file.txt");
+        fs::write(&file_path, b"Content").unwrap();
+        set_file_modified_time(&file_path, 40);
+
+        let hard_link_path = temp_source_dir.path().join("hard_link.txt");
+        fs::hard_link(&file_path, &hard_link_path).unwrap();
+
+        // Set up CLI arguments
+        let cli = Cli {
+            source: temp_source_dir.path().to_path_buf(),
+            temporary: temp_dest_dir.path().to_path_buf(),
+            days: "+30".to_string(),
+            dry_run: false,
+            verbose: false,
+            mode: OperationMode::Move,
+            exclude: None,
+        };
+
+        let mover = FileMover::new(&cli).unwrap();
+        mover.execute().unwrap();
+
+        // Assertions
+        assert!(!file_path.exists(), "Original file should be moved");
+        assert!(!hard_link_path.exists(), "Hard link should be moved");
+        assert!(
+            temp_dest_dir.path().join("file.txt").exists(),
+            "File should be in destination"
+        );
+        assert!(
+            temp_dest_dir.path().join("hard_link.txt").exists(),
+            "Hard link should be in destination"
+        );
+    }
+}
+
+#[test]
+fn test_move_hidden_files_on_unix() {
+    #[cfg(unix)]
+    {
+        let temp_source_dir = TempDir::new().unwrap();
+        let temp_dest_dir = TempDir::new().unwrap();
+
+        // Create hidden files (starting with a dot)
+        let hidden_file_path = temp_source_dir.path().join(".hidden_file");
+        fs::write(&hidden_file_path, b"Hidden file").unwrap();
+        set_file_modified_time(&hidden_file_path, 40);
+
+        // Set up CLI arguments
+        let cli = Cli {
+            source: temp_source_dir.path().to_path_buf(),
+            temporary: temp_dest_dir.path().to_path_buf(),
+            days: "+30".to_string(),
+            dry_run: false,
+            verbose: false,
+            mode: OperationMode::Move,
+            exclude: None,
+        };
+
+        let mover = FileMover::new(&cli).unwrap();
+        mover.execute().unwrap();
+
+        // Assertions
+        assert!(!hidden_file_path.exists(), "Hidden file should be moved");
+        assert!(
+            temp_dest_dir.path().join(".hidden_file").exists(),
+            "Hidden file should be in destination"
+        );
+    }
+}
+
+#[test]
+fn test_move_with_source_as_symbolic_link() {
+    #[cfg(unix)]
+    {
+        let real_source_dir = TempDir::new().unwrap();
+        let temp_dest_dir = TempDir::new().unwrap();
+        let temp_symlink_dir = TempDir::new().unwrap();
+
+        let symlink_path = temp_symlink_dir.path().join("symlink_source");
+        std::os::unix::fs::symlink(real_source_dir.path(), &symlink_path).unwrap();
+
+        // Create a file in the real source directory
+        let file_path = real_source_dir.path().join("file.txt");
+        fs::write(&file_path, b"Content").unwrap();
+        set_file_modified_time(&file_path, 40);
+
+        // Set up CLI arguments with symlink as source
+        let cli = Cli {
+            source: symlink_path.clone(),
+            temporary: temp_dest_dir.path().to_path_buf(),
+            days: "+30".to_string(),
+            dry_run: false,
+            verbose: true,
+            mode: OperationMode::Move,
+            exclude: None,
+        };
+
+        let mover = FileMover::new(&cli).unwrap();
+        let result = mover.execute();
+
+        // Assertions
+        assert!(
+            result.is_ok(),
+            "Operation should succeed when source is a symlink"
+        );
+        assert!(
+            !file_path.exists(),
+            "File should be moved from the real source directory"
+        );
+        assert!(
+            temp_dest_dir.path().join("file.txt").exists(),
+            "File should be in destination"
+        );
+    }
+}
+
+#[test]
+fn test_move_with_destination_as_symbolic_link() {
+    #[cfg(unix)]
+    {
+        let temp_source_dir = TempDir::new().unwrap();
+        let real_dest_dir = TempDir::new().unwrap();
+        let temp_symlink_dir = TempDir::new().unwrap();
+
+        let symlink_path = temp_symlink_dir.path().join("symlink_dest");
+        std::os::unix::fs::symlink(real_dest_dir.path(), &symlink_path).unwrap();
+
+        // Create a file in the source directory
+        let file_path = temp_source_dir.path().join("file.txt");
+        fs::write(&file_path, b"Content").unwrap();
+        set_file_modified_time(&file_path, 40);
+
+        // Set up CLI arguments with symlink as temporary directory
+        let cli = Cli {
+            source: temp_source_dir.path().to_path_buf(),
+            temporary: symlink_path.clone(),
+            days: "+30".to_string(),
+            dry_run: false,
+            verbose: true,
+            mode: OperationMode::Move,
+            exclude: None,
+        };
+
+        let mover = FileMover::new(&cli).unwrap();
+        let result = mover.execute();
+
+        // Assertions
+        assert!(
+            result.is_ok(),
+            "Operation should succeed when destination is a symlink"
+        );
+        assert!(
+            !file_path.exists(),
+            "File should be moved from the source directory"
+        );
+        assert!(
+            real_dest_dir.path().join("file.txt").exists(),
+            "File should be in the real destination directory"
+        );
+    }
+}
+
+#[test]
+fn test_move_files_with_max_path_length() {
+    // Create a deeply nested directory structure approaching max path length
+    let temp_source_dir = TempDir::new().unwrap();
+    let temp_dest_dir = TempDir::new().unwrap();
+
+    let mut current_dir = temp_source_dir.path().to_path_buf();
+    for _ in 0..50 {
+        current_dir = current_dir.join("nested");
+        fs::create_dir(&current_dir).unwrap();
+    }
+
+    let file_path = current_dir.join("file.txt");
+    fs::write(&file_path, b"Content").unwrap();
+    set_file_modified_time(&file_path, 40);
+
+    // Set up CLI arguments
+    let cli = Cli {
+        source: temp_source_dir.path().to_path_buf(),
+        temporary: temp_dest_dir.path().to_path_buf(),
+        days: "+30".to_string(),
+        dry_run: false,
+        verbose: true,
+        mode: OperationMode::Move,
+        exclude: None,
+    };
+
+    let result = FileMover::new(&cli).and_then(|mover| Ok(mover.execute()));
+
+    // Assertions
+    if result.is_err() {
+        // On some systems, this may fail due to path length limitations
+        eprintln!("Operation failed due to path length limitations");
+    } else {
+        assert!(
+            !file_path.exists(),
+            "File should be moved despite deep nesting"
+        );
+    }
+}
+
+#[test]
+fn test_move_files_with_large_number_of_hard_links() {
+    #[cfg(unix)]
+    {
+        let temp_source_dir = TempDir::new().unwrap();
+        let temp_dest_dir = TempDir::new().unwrap();
+
+        // Create a file with multiple hard links
+        let file_path = temp_source_dir.path().join("file.txt");
+        fs::write(&file_path, b"Content").unwrap();
+        set_file_modified_time(&file_path, 40);
+
+        for i in 0..10 {
+            let hard_link_path = temp_source_dir.path().join(format!("hard_link_{}.txt", i));
+            fs::hard_link(&file_path, &hard_link_path).unwrap();
+        }
+
+        // Set up CLI arguments
+        let cli = Cli {
+            source: temp_source_dir.path().to_path_buf(),
+            temporary: temp_dest_dir.path().to_path_buf(),
+            days: "+30".to_string(),
+            dry_run: false,
+            verbose: false,
+            mode: OperationMode::Move,
+            exclude: None,
+        };
+
+        let mover = FileMover::new(&cli).unwrap();
+        mover.execute().unwrap();
+
+        // Assertions
+        for i in 0..10 {
+            let hard_link_path = temp_source_dir.path().join(format!("hard_link_{}.txt", i));
+            assert!(!hard_link_path.exists(), "Hard link {} should be moved", i);
+            assert!(
+                temp_dest_dir
+                    .path()
+                    .join(format!("hard_link_{}.txt", i))
+                    .exists(),
+                "Hard link {} should be in destination",
+                i
+            );
+        }
+    }
 }

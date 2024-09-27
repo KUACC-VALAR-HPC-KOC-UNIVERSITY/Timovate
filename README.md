@@ -26,6 +26,13 @@ Timovate is a command-line utility written in Rust that moves or restores files 
 
 - **Rust**: Timovate is written in Rust. Ensure you have Rust and Cargo installed. You can install Rust using [rustup](https://rustup.rs/).
 
+### Build & Install from Source
+1. **Install**
+
+  ```bash
+   cargo install --git https://github.com/KUACC-VALAR-HPC-KOC-UNIVERSITY/Timovate
+   ```
+
 ### Build from Source
 
 1. **Clone the Repository**

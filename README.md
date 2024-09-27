@@ -1,4 +1,4 @@
-# Timovate
+# Timovate [![Rust](https://github.com/KUACC-VALAR-HPC-KOC-UNIVERSITY/Timovate/actions/workflows/rust.yml/badge.svg)](https://github.com/KUACC-VALAR-HPC-KOC-UNIVERSITY/Timovate/actions/workflows/rust.yml)
 
 Timovate is a command-line utility written in Rust that moves or restores files based on their modification time. It's designed to help you manage files that are older or newer than a specified number of days, similar to the `-mtime` option in the Unix `find` command.
 

@@ -1,0 +1,24 @@
+[package]
+name = "timovate"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "timovate"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4.5.18", features = ["derive"] }
+rayon = "1.10.0"
+regex = "1.10.6"
+
+[dev-dependencies]
+tempfile = "3.3.0"
+filetime = "0.2.14"
+assert_fs = "1.0.6"
+nix = "0.26.2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

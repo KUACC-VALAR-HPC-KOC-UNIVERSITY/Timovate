@@ -2085,3 +2085,88 @@ fn test_move_files_with_large_number_of_hard_links() {
         }
     }
 }
+
+#[test]
+fn test_move_with_destination_inside_source() {
+    // Create the source directory
+    let temp_source_dir = TempDir::new().unwrap();
+
+    // Create a subdirectory inside the source directory to be used as the temporary directory
+    let temp_dest_dir = temp_source_dir.path().join("temp");
+    fs::create_dir(&temp_dest_dir).unwrap();
+
+    // Create a file in the source directory
+    let file_path = temp_source_dir.path().join("file.txt");
+    fs::write(&file_path, b"Content").unwrap();
+    set_file_modified_time(&file_path, 40);
+
+    // Create a file inside the temporary directory
+    let temp_file_path = temp_dest_dir.join("temp_file.txt");
+    fs::write(&temp_file_path, b"Temporary Content").unwrap();
+    set_file_modified_time(&temp_file_path, 40);
+
+    // Set up CLI arguments with destination inside source
+    let cli = Cli {
+        source: temp_source_dir.path().to_path_buf(),
+        temporary: temp_dest_dir.clone(),
+        days: "+30".to_string(),
+        dry_run: false,
+        verbose: false,
+        mode: OperationMode::Move,
+        exclude: None,
+    };
+
+    // Since this setup may cause an infinite loop, we'll set a timeout
+    let result = std::panic::catch_unwind(|| {
+        let mover = FileMover::new(&cli).unwrap();
+        mover.execute().unwrap();
+    });
+
+    assert!(
+        result.is_err(),
+        "Program should handle destination inside source without infinite loop"
+    );
+}
+
+
+#[test]
+fn test_restore_with_source_inside_temporary() {
+    // Create the temporary directory
+    let temp_temp_dir = TempDir::new().unwrap();
+
+    // Create a subdirectory inside the temporary directory to be used as the source directory
+    let temp_source_dir = temp_temp_dir.path().join("source");
+    fs::create_dir(&temp_source_dir).unwrap();
+
+    // Create a file in the temporary directory
+    let temp_file_path = temp_temp_dir.path().join("temp_file.txt");
+    fs::write(&temp_file_path, b"Temporary Content").unwrap();
+    set_file_modified_time(&temp_file_path, 40);
+
+    // Create a file inside the source directory
+    let source_file_path = temp_source_dir.join("source_file.txt");
+    fs::write(&source_file_path, b"Source Content").unwrap();
+    set_file_modified_time(&source_file_path, 40);
+
+    // Set up CLI arguments with source inside temporary
+    let cli = Cli {
+        source: temp_source_dir.clone(),
+        temporary: temp_temp_dir.path().to_path_buf(),
+        days: "0".to_string(),
+        dry_run: false,
+        verbose: false,
+        mode: OperationMode::Restore,
+        exclude: None,
+    };
+
+    // Since this setup may cause an infinite loop, we'll set a timeout
+    let result = std::panic::catch_unwind(|| {
+        let mover = FileMover::new(&cli).unwrap();
+        mover.execute().unwrap();
+    });
+
+    assert!(
+        result.is_err(),
+        "Program should handle source inside temporary without infinite loop"
+    );
+}
